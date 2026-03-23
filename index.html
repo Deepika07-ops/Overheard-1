@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Overheard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Georgia, serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    h1 { font-size: 2rem; font-weight: 400; color: #fff; margin-bottom: 6px; }
+    .sub { font-size: 14px; color: #666; margin-bottom: 3rem; }
+    #mic-btn {
+      width: 80px; height: 80px; border-radius: 50%;
+      border: 2px solid #1D9E75;
+      background: transparent; color: #1D9E75;
+      font-size: 28px; cursor: pointer;
+      transition: all .2s; margin-bottom: 2rem;
+    }
+    #mic-btn.listening {
+      background: #1D9E75; color: #fff;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(29,158,117,0.4); }
+      50% { box-shadow: 0 0 0 16px rgba(29,158,117,0); }
+    }
+    #status { font-size: 13px; color: #555; margin-bottom: 2rem; min-height: 20px; }
+    #story-box {
+      max-width: 560px; width: 100%;
+      font-size: 18px; line-height: 1.8; color: #ccc;
+      text-align: center; min-height: 120px;
+      transition: opacity .6s;
+    }
+    #story-box.fade { opacity: 0; }
+    #location {
+      margin-top: 2rem; font-size: 12px; color: #444;
+    }
+  </style>
+</head>
+<body>
+  <h1>Overheard</h1>
+  <p class="sub">stories from the air around you</p>
+<input id="location-input" type="text" placeholder="where are you? (classroom, cafe, lab...)" 
+style="background:transparent; border:none; border-bottom:1px solid #333; 
+color:#666; font-size:13px; text-align:center; width:280px; 
+padding:6px; margin-bottom:2rem; outline:none; font-family:Georgia,serif;"/>
+  <button id="mic-btn" onclick="toggleListen()">🎙</button>
+  <p id="status">press the mic to start listening</p>
+  <div id="story-box">Your first story will appear here...</div>
+  <p id="location"></p>
+
+  <script type="module">
+    import { featuresToScene, buildPrompt } from './translate.js';
+
+    let listening = false;
+    let ctx, analyser, source, stream, interval;
+
+    window.toggleListen = async function() {
+      if (!listening) {
+        await startListening();
+      } else {
+        stopListening();
+      }
+    }
+
+    async function startListening() {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      ctx = new AudioContext();
+      source = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      listening = true;
+      document.getElementById('mic-btn').classList.add('listening');
+      document.getElementById('status').textContent = 'listening... first story in 5 seconds';
+
+      generateStory();
+      interval = setInterval(generateStory, 20000);
+    }
+
+    function stopListening() {
+      clearInterval(interval);
+      stream?.getTracks().forEach(t => t.stop());
+      ctx?.close();
+      listening = false;
+      document.getElementById('mic-btn').classList.remove('listening');
+      document.getElementById('status').textContent = 'press the mic to start listening';
+    }
+
+    async function generateStory() {
+      if (!analyser) return;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+
+      const avg = arr => Math.round(arr.reduce((a,b) => a+b) / arr.length);
+      const features = {
+        volume: avg(data),
+        bass:   avg(data.slice(0, 10)),
+        mid:    avg(data.slice(10, 80)),
+        treble: avg(data.slice(80, 200))
+      };
+
+      document.getElementById('status').textContent = 'writing your story...';
+
+      const scene = featuresToScene(features);
+      const prompt = buildPrompt(scene);
+
+      try {
+        const res = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt })
+        });
+        const { story } = await res.json();
+
+        const box = document.getElementById('story-box');
+        box.classList.add('fade');
+        setTimeout(() => {
+          box.textContent = story;
+          box.classList.remove('fade');
+        }, 600);
+
+        document.getElementById('status').textContent = 'next story in 20 seconds...';
+      } catch(e) {
+        document.getElementById('status').textContent = 'error — check your API key in .env';
+      }
+    }
+  </script>
+</body>
+</html>
